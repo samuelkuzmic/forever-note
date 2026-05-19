@@ -412,7 +412,6 @@
                     const canvasCompressor = document.createElement('canvas');
                     const ctxCompressor = canvasCompressor.getContext('2d');
                     
-                    // We keep the image size much higher for clarity (up to 600px)
                     let width = img.width;
                     let height = img.height;
                     const max_size = 600; 
@@ -433,7 +432,6 @@
                     canvasCompressor.height = height;
                     ctxCompressor.drawImage(img, 0, 0, width, height);
                     
-                    // Using WebP format at 0.75 quality: retains awesome sharpness but keeps bytes tiny
                     base64ImageString = canvasCompressor.toDataURL('image/webp', 0.75);
                     
                     dropZoneImg.src = base64ImageString;
@@ -791,10 +789,13 @@
                         ctx.fillText("[WIDE ASCII ART NOTE]", screenX + (6 * camera.zoom), screenY + (45 * camera.zoom));
                         ctx.font = `${Math.max(6.5, 7.5 * camera.zoom)}px monospace`;
                         ctx.fillText("CLICK TO SEE ARTWORK", screenX + (6 * camera.zoom), screenY + (65 * camera.zoom));
-                    } else if (noteContentText.length >= 1000) {
+                    } else if (noteContentText.length >= 250) {
+                        // High-performance catch for standard text notes with 250+ characters
                         ctx.fillStyle = "#888888";
-                        ctx.font = `italic ${Math.max(7, 8.5 * camera.zoom)}px monospace`;
-                        ctx.fillText("[LONG NOTE - CLICK TO READ]", screenX + (6 * camera.zoom), screenY + (45 * camera.zoom));
+                        ctx.font = `italic bold ${Math.max(7, 8 * camera.zoom)}px monospace`;
+                        ctx.fillText("[LONG NOTE]", screenX + (6 * camera.zoom), screenY + (45 * camera.zoom));
+                        ctx.font = `${Math.max(6.5, 7.5 * camera.zoom)}px monospace`;
+                        ctx.fillText("CLICK TO READ MORE", screenX + (6 * camera.zoom), screenY + (65 * camera.zoom));
                     } else {
                         ctx.fillStyle = "#000000";
                         drawCardWrappedText(
