@@ -74,7 +74,6 @@
             justify-content: center;
         }
 
-        /* Forces the modal workspace wrapper to fit wide content width without clipping */
         .overlay-content.wide-scroll-view {
             max-width: none;
             width: max-content;
@@ -93,11 +92,33 @@
             font-size: 1.2rem;
         }
         .overlay-content textarea {
-            height: 350px;
+            height: 250px;
             resize: none;
             white-space: pre;
             overflow: auto;
         }
+        
+        .drop-zone {
+            border: 2px dashed #ffffff;
+            padding: 25px;
+            text-align: center;
+            background: #000000;
+            cursor: pointer;
+            margin-bottom: 20px;
+            transition: background 0.2s ease;
+        }
+        .drop-zone.dragover {
+            background: #222222;
+            border-color: #00ffcc;
+        }
+        .drop-zone-preview {
+            max-height: 150px;
+            max-width: 100%;
+            display: none;
+            margin: 15px auto 0 auto;
+            border: 1px solid #ffffff;
+        }
+
         .overlay-content .actions {
             display: flex;
             gap: 20px;
@@ -125,7 +146,6 @@
             margin-bottom: 30px;
         }
 
-        /* The text size stays completely identical, but behavior un-wraps */
         #view-text {
             font-size: 1.8rem;
             line-height: 2.6rem;
@@ -136,10 +156,18 @@
             padding-left: 20px;
         }
 
-        /* Applied automatically if the database record dictates it's a wide layout note */
         #view-text.horizontal-layout {
             word-wrap: normal;
             white-space: pre; 
+        }
+        
+        #view-image {
+            display: none;
+            max-width: 100%;
+            max-height: 50vh;
+            margin-bottom: 40px;
+            border: 1px solid #ffffff;
+            object-fit: contain;
         }
 
         #view-time {
@@ -165,6 +193,7 @@
         .toggle-setting-container {
             margin-bottom: 20px;
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
             gap: 15px;
         }
@@ -194,12 +223,24 @@
             <div id="write-error-msg"></div>
             
             <div class="toggle-setting-container">
-                <span style="font-weight: bold;">CANVAS SIZE:</span>
-                <button id="write-layout-toggle-btn">NOTE TYPE: STANDARD</button>
+                <span style="font-weight: bold;">NOTE FORMAT:</span>
+                <button id="write-layout-toggle-btn">TYPE: STANDARD TEXT</button>
             </div>
 
             <input type="text" id="author-input" placeholder="WHO ARE YOU?" autocomplete="off">
-            <textarea id="note-input" placeholder="WRITE YOUR NOTE HERE... (TIP: WIDE LAYOUT PREVENTS ASCII ART CORRUPTION)"></textarea>
+            
+            <!-- Standard/Wide Text Field -->
+            <textarea id="note-input" placeholder="WRITE YOUR NOTE HERE..."></textarea>
+            
+            <!-- Direct Base64 String Handler Box -->
+            <div id="picture-upload-container" style="display: none;">
+                <div id="drop-zone" class="drop-zone">
+                    <span id="drop-zone-text">DRAG & DROP A COMPRESSED IMAGE HERE OR CLICK TO BROWSE</span>
+                    <input type="file" id="file-input" accept="image/*" style="display: none;">
+                    <img id="drop-zone-img" class="drop-zone-preview" alt="Upload preview">
+                </div>
+                <input type="text" id="caption-input" placeholder="ADD AN OPTIONAL CAPTION..." autocomplete="off">
+            </div>
             
             <div class="actions">
                 <button id="submit-note-btn" style="background:#ffffff; color:#000000;">PUBLISH NOTE</button>
@@ -212,6 +253,7 @@
     <div id="view-panel" class="fullscreen-overlay">
         <div id="view-content-wrapper" class="overlay-content">
             <div id="view-author"></div>
+            <img id="view-image" alt="Note Attachment">
             <div id="view-text"></div>
             <div id="view-time"></div>
             <div class="actions">
@@ -234,7 +276,7 @@
             authDomain: "note-3a92d.firebaseapp.com",
             databaseURL: "https://note-3a92d-default-rtdb.firebaseio.com",
             projectId: "note-3a92d",
-            storageBucket: "note-3a92d.firebasestorage.app",
+            storageBucket: "note-3a92d.appspot.com",
             messagingSenderId: "281622748011",
             appId: "1:281622748011:web:8a760d6deada0af39f0a2e",
             measurementId: "G-7GVQCV766J"
@@ -257,30 +299,38 @@
         const camera = { x: 0, y: 0, zoom: 1.0, min: 0.05, max: 5.0, speed: 8 };
         const keys = {};
         let worldNotes = [];
+        const imageCache = {};
         
         let lastMouseScreenX = window.innerWidth / 2;
         let lastMouseScreenY = window.innerHeight / 2;
         let crosshairWorldX = 0;
         let crosshairWorldY = 0;
         
-        // Dynamic structural note metrics
         const NOTE_WIDTH = 180;
         const NOTE_HEIGHT = 115; 
         let currentMode = "WRITE"; 
         
-        // Author dynamic write setting flag
-        let isNoteWideSetting = false;
+        let noteTypeSetting = "TEXT"; 
+        let base64ImageString = ""; 
 
         let placementTargetX = 0;
         let placementTargetY = 0;
 
         const authorInput = document.getElementById("author-input");
         const noteInput = document.getElementById("note-input");
+        const pictureUploadContainer = document.getElementById("picture-upload-container");
+        const captionInput = document.getElementById("caption-input");
+        const dropZone = document.getElementById("drop-zone");
+        const fileInput = document.getElementById("file-input");
+        const dropZoneImg = document.getElementById("drop-zone-img");
+        const dropZoneText = document.getElementById("drop-zone-text");
+        
         const sysMsg = document.getElementById("system-message");
         const writeErrorMsg = document.getElementById("write-error-msg");
         const modeToggleBtn = document.getElementById("mode-toggle-btn");
         const writeLayoutToggleBtn = document.getElementById("write-layout-toggle-btn");
         const viewText = document.getElementById("view-text");
+        const viewImage = document.getElementById("view-image");
         const viewContentWrapper = document.getElementById("view-content-wrapper");
         const coordXLabel = document.getElementById("coord-x");
         const coordYLabel = document.getElementById("coord-y");
@@ -301,17 +351,99 @@
             }
         });
 
-        // Configures note properties prior to publishing 
         writeLayoutToggleBtn.addEventListener('click', () => {
-            isNoteWideSetting = !isNoteWideSetting;
-            if (isNoteWideSetting) {
-                writeLayoutToggleBtn.innerText = "NOTE TYPE: WIDE (ASCII ART)";
+            if (noteTypeSetting === "TEXT") {
+                noteTypeSetting = "WIDE";
+                writeLayoutToggleBtn.innerText = "TYPE: WIDE (ASCII ART)";
+                noteInput.style.display = "block";
+                pictureUploadContainer.style.display = "none";
                 noteInput.style.whiteSpace = "pre";
+                noteInput.placeholder = "PASTE YOUR ASCII ARTWORK HERE...";
+            } else if (noteTypeSetting === "WIDE") {
+                noteTypeSetting = "PICTURE";
+                writeLayoutToggleBtn.innerText = "TYPE: PICTURE MODE";
+                noteInput.style.display = "none";
+                pictureUploadContainer.style.display = "block";
             } else {
-                writeLayoutToggleBtn.innerText = "NOTE TYPE: STANDARD";
+                noteTypeSetting = "TEXT";
+                writeLayoutToggleBtn.innerText = "TYPE: STANDARD TEXT";
+                noteInput.style.display = "block";
+                pictureUploadContainer.style.display = "none";
                 noteInput.style.whiteSpace = "pre-wrap";
+                noteInput.placeholder = "WRITE YOUR NOTE HERE...";
             }
         });
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                handleImageSelection(e.dataTransfer.files[0]);
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files && e.target.files[0]) {
+                handleImageSelection(e.target.files[0]);
+            }
+        });
+
+        function handleImageSelection(file) {
+            if (!file.type.startsWith('image/')) {
+                writeErrorMsg.innerText = "Error: File must be an image.";
+                return;
+            }
+
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = function() {
+                    const canvasCompressor = document.createElement('canvas');
+                    const ctxCompressor = canvasCompressor.getContext('2d');
+                    
+                    // We keep the image size much higher for clarity (up to 600px)
+                    let width = img.width;
+                    let height = img.height;
+                    const max_size = 600; 
+
+                    if (width > height) {
+                        if (width > max_size) {
+                            height *= max_size / width;
+                            width = max_size;
+                        }
+                    } else {
+                        if (height > max_size) {
+                            width *= max_size / height;
+                            height = max_size;
+                        }
+                    }
+
+                    canvasCompressor.width = width;
+                    canvasCompressor.height = height;
+                    ctxCompressor.drawImage(img, 0, 0, width, height);
+                    
+                    // Using WebP format at 0.75 quality: retains awesome sharpness but keeps bytes tiny
+                    base64ImageString = canvasCompressor.toDataURL('image/webp', 0.75);
+                    
+                    dropZoneImg.src = base64ImageString;
+                    dropZoneImg.style.display = "block";
+                    dropZoneText.innerText = `READY: ${file.name} (CLICK TO REPLACE)`;
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
 
         window.addEventListener('wheel', e => {
             if (document.getElementById("view-panel").style.display === "block" || 
@@ -326,7 +458,13 @@
         onSnapshot(notesCollection, snapshot => {
             worldNotes = [];
             snapshot.forEach(doc => {
-                worldNotes.push({ id: doc.id, ...doc.data() });
+                const data = doc.data();
+                worldNotes.push({ id: doc.id, ...data });
+                
+                if (data.isPicture && data.imageUrl && !imageCache[data.imageUrl]) {
+                    imageCache[data.imageUrl] = new Image();
+                    imageCache[data.imageUrl].src = data.imageUrl;
+                }
             });
             worldNotes.sort((a, b) => {
                 const tA = a.createdAt ? a.createdAt.toMillis() : 0;
@@ -382,13 +520,21 @@
                     viewText.innerText = note.text || "";
                     document.getElementById("view-time").innerText = `TIME CREATED: ${formatNoteTime(note.createdAt)}`;
                     
-                    // CRITICAL MATCHING: Read layout configuration direct from individual database flags!
-                    if (note.isWide === true) {
-                        viewText.classList.add('horizontal-layout');
-                        viewContentWrapper.classList.add('wide-scroll-view');
-                    } else {
+                    if (note.isPicture === true) {
+                        viewImage.src = note.imageUrl || "";
+                        viewImage.style.display = "block";
                         viewText.classList.remove('horizontal-layout');
                         viewContentWrapper.classList.remove('wide-scroll-view');
+                    } else {
+                        viewImage.style.display = "none";
+                        viewImage.src = "";
+                        if (note.isWide === true) {
+                            viewText.classList.add('horizontal-layout');
+                            viewContentWrapper.classList.add('wide-scroll-view');
+                        } else {
+                            viewText.classList.remove('horizontal-layout');
+                            viewContentWrapper.classList.remove('wide-scroll-view');
+                        }
                     }
 
                     const viewPanel = document.getElementById("view-panel");
@@ -420,17 +566,29 @@
                 writeErrorMsg.innerText = ""; 
                 document.getElementById("write-panel").style.display = "block";
                 document.getElementById("write-panel").scrollTop = 0;
-                noteInput.focus();
+                
+                if (noteTypeSetting === "PICTURE") {
+                    captionInput.focus();
+                } else {
+                    noteInput.focus();
+                }
             }
         });
 
         window.closeWritePanel = function() {
             document.getElementById("write-panel").style.display = "none";
             noteInput.value = "";
+            captionInput.value = "";
             writeErrorMsg.innerText = "";
-            // Reset state
-            isNoteWideSetting = false;
-            writeLayoutToggleBtn.innerText = "NOTE TYPE: STANDARD";
+            base64ImageString = "";
+            dropZoneImg.src = "";
+            dropZoneImg.style.display = "none";
+            dropZoneText.innerText = "DRAG & DROP A COMPRESSED IMAGE HERE OR CLICK TO BROWSE";
+            
+            noteTypeSetting = "TEXT";
+            writeLayoutToggleBtn.innerText = "TYPE: STANDARD TEXT";
+            noteInput.style.display = "block";
+            pictureUploadContainer.style.display = "none";
             noteInput.style.whiteSpace = "pre-wrap";
         }
 
@@ -440,10 +598,18 @@
 
         submitNoteBtn.addEventListener('click', async () => {
             const author = authorInput.value.trim();
-            const text = noteInput.value.trim();
+            const text = noteTypeSetting === "PICTURE" ? captionInput.value.trim() : noteInput.value.trim();
 
-            if (!author || !text) {
-                writeErrorMsg.innerText = "Error: Please enter both identity and note text.";
+            if (!author) {
+                writeErrorMsg.innerText = "Error: Please enter your identity.";
+                return;
+            }
+            if (noteTypeSetting !== "PICTURE" && !text) {
+                writeErrorMsg.innerText = "Error: Please write content inside your note card.";
+                return;
+            }
+            if (noteTypeSetting === "PICTURE" && !base64ImageString) {
+                writeErrorMsg.innerText = "Error: Please select an image file first.";
                 return;
             }
 
@@ -460,21 +626,29 @@
                 return;
             }
 
+            submitNoteBtn.disabled = true;
+            submitNoteBtn.innerText = "PUBLISHING...";
+
             try {
-                // SAVING STRUCTURAL CONFIG TO FIRESTORE DIRECTLY
                 await addDoc(notesCollection, {
                     author: author,
                     text: text,
                     x: Number(placementTargetX),
                     y: Number(placementTargetY),
-                    isWide: isNoteWideSetting, // Locked structural choice saved permanently
+                    isWide: (noteTypeSetting === "WIDE"),
+                    isPicture: (noteTypeSetting === "PICTURE"),
+                    imageUrl: base64ImageString, 
                     createdAt: serverTimestamp()
                 });
 
+                submitNoteBtn.disabled = false;
+                submitNoteBtn.innerText = "PUBLISH NOTE";
                 closeWritePanel();
             } catch (err) {
                 console.error(err);
-                writeErrorMsg.innerText = "Error: Connection blocked. Verify Firebase security rules.";
+                submitNoteBtn.disabled = false;
+                submitNoteBtn.innerText = "PUBLISH NOTE";
+                writeErrorMsg.innerText = "Error: Connection blocked. Verify Firestore Rules.";
             }
         });
 
@@ -540,7 +714,6 @@
 
             ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-            // Grid Layout
             ctx.strokeStyle = "#111111";
             ctx.lineWidth = 1;
             const step = 100;
@@ -562,23 +735,23 @@
                 ctx.stroke();
             }
 
-            // Render Solid Note Cards
             worldNotes.forEach(note => {
                 const screenX = (note.x - camera.x) * camera.zoom + canvas.width / 2;
                 const screenY = (note.y - camera.y) * camera.zoom + canvas.height / 2;
                 const sWidth = NOTE_WIDTH * camera.zoom;
                 const sHeight = NOTE_HEIGHT * camera.zoom;
 
-                // VISUAL IDENTIFIER: Wide layout notes get a sleek neon border on the main map!
-                if (note.isWide === true) {
-                    ctx.fillStyle = "#ffffff";
-                    ctx.fillRect(screenX, screenY, sWidth, sHeight);
-                    ctx.strokeStyle = "#00ffcc";
+                ctx.fillStyle = "#ffffff";
+                ctx.fillRect(screenX, screenY, sWidth, sHeight);
+
+                if (note.isPicture === true) {
+                    ctx.strokeStyle = "#ff00ff"; 
                     ctx.lineWidth = Math.max(1.5, 2 * camera.zoom);
                     ctx.strokeRect(screenX, screenY, sWidth, sHeight);
-                } else {
-                    ctx.fillStyle = "#ffffff";
-                    ctx.fillRect(screenX, screenY, sWidth, sHeight);
+                } else if (note.isWide === true) {
+                    ctx.strokeStyle = "#00ffcc"; 
+                    ctx.lineWidth = Math.max(1.5, 2 * camera.zoom);
+                    ctx.strokeRect(screenX, screenY, sWidth, sHeight);
                 }
 
                 if (camera.zoom > 0.05) {
@@ -599,8 +772,20 @@
 
                     const noteContentText = note.text || "";
                     
-                    // Map preview optimization for wide configurations
-                    if (note.isWide === true) {
+                    if (note.isPicture === true) {
+                        const cachedImg = imageCache[note.imageUrl];
+                        if (cachedImg && cachedImg.complete) {
+                            const pX = screenX + (6 * camera.zoom);
+                            const pY = screenY + (24 * camera.zoom);
+                            const pW = sWidth - (12 * camera.zoom);
+                            const pH = sHeight - (44 * camera.zoom);
+                            ctx.drawImage(cachedImg, pX, pY, pW, pH);
+                        } else {
+                            ctx.fillStyle = "#888888";
+                            ctx.font = `italic ${Math.max(6.5, 7.5 * camera.zoom)}px monospace`;
+                            ctx.fillText("LOADING IMAGE...", screenX + (6 * camera.zoom), screenY + (45 * camera.zoom));
+                        }
+                    } else if (note.isWide === true) {
                         ctx.fillStyle = "#555555";
                         ctx.font = `italic bold ${Math.max(7, 8 * camera.zoom)}px monospace`;
                         ctx.fillText("[WIDE ASCII ART NOTE]", screenX + (6 * camera.zoom), screenY + (45 * camera.zoom));
